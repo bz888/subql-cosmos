@@ -343,7 +343,7 @@ export async function fetchBlocksBatches(
   });
 }
 
-class LazyBlockContent implements BlockContent {
+export class LazyBlockContent implements BlockContent {
   private _wrappedBlock: CosmosBlock;
   private _wrappedTransaction: CosmosTransaction[];
   private _wrappedMessage: CosmosMessage[];
