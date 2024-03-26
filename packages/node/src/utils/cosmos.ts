@@ -193,6 +193,7 @@ export async function fetchCosmosBlocksArray(
   api: CosmosClient,
   blockArray: number[],
 ): Promise<[BlockResponse, BlockResultsResponse][]> {
+  // todo this is where kyve introduction should be.
   return Promise.all(
     blockArray.map(async (height) => getBlockByHeight(api, height)),
   );
@@ -324,7 +325,6 @@ export async function fetchBlocksBatches(
   blockArray: number[],
 ): Promise<BlockContent[]> {
   const blocks = await fetchCosmosBlocksArray(api, blockArray);
-  // todo add kyve support here
   return blocks.map(([blockInfo, blockResults]) => {
     try {
       assert(
