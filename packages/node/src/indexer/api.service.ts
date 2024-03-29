@@ -36,6 +36,7 @@ import {
 import { SubqueryProject } from '../configure/SubqueryProject';
 import * as CosmosUtil from '../utils/cosmos';
 import { KyveApi } from '../utils/kyve';
+import { yargsOptions } from '../yargs';
 import { CosmosClientConnection } from './cosmosClient.connection';
 import { BlockContent } from './types';
 
@@ -88,6 +89,12 @@ export class ApiService
 
     this.registry = await this.buildRegistry();
 
+    const { argv } = yargsOptions;
+
+    if (argv.kyve) {
+      this.kyveClient = new KyveApi(network.chainId);
+    }
+
     await this.createConnections(
       network,
       (endpoint) =>
@@ -95,6 +102,7 @@ export class ApiService
           endpoint,
           this.fetchBlocksBatches,
           this.registry,
+          this.kyveApi,
         ),
       (connection: CosmosClientConnection) => {
         const api = connection.unsafeApi;
@@ -103,6 +111,10 @@ export class ApiService
     );
 
     return this;
+  }
+
+  get kyveApi(): KyveApi {
+    return this.kyveClient;
   }
 
   get api(): CosmosClient {
@@ -139,12 +151,8 @@ export class ApiService
     return res;
   }
 }
-// instead of using log,
-// use events
-// step 1. get rid of logs and use just events.
 
 export class CosmosClient extends CosmWasmClient {
-  private kyveClient: KyveApi;
   constructor(
     private readonly tendermintClient: Tendermint37Client,
     public registry: Registry,
@@ -161,18 +169,6 @@ export class CosmosClient extends CosmWasmClient {
     return this.getHeight();
   }
   */
-
-  // todo, a trigger for when kyve should used
-  async initKyveClient(chainId: string): Promise<void> {
-    this.kyveClient = new KyveApi(chainId);
-    await this.kyveClient.init();
-  }
-
-  async kyveBlockByHeight(
-    height: number,
-  ): Promise<[BlockResponse, BlockResultsResponse]> {
-    return this.kyveClient.getBlockByHeight(height);
-  }
 
   // eslint-disable-next-line @typescript-eslint/require-await
   async blockInfo(height?: number): Promise<BlockResponse> {

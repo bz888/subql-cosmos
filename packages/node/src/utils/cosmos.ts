@@ -28,6 +28,7 @@ import { isObjectLike } from 'lodash';
 import { isLong } from 'long';
 import { CosmosClient } from '../indexer/api.service';
 import { BlockContent } from '../indexer/types';
+import { KyveApi } from './kyve';
 
 const logger = getLogger('fetch');
 
@@ -192,10 +193,13 @@ async function getBlockByHeight(
 export async function fetchCosmosBlocksArray(
   api: CosmosClient,
   blockArray: number[],
+  kyve?: KyveApi,
 ): Promise<[BlockResponse, BlockResultsResponse][]> {
   // todo this is where kyve introduction should be.
   return Promise.all(
-    blockArray.map(async (height) => getBlockByHeight(api, height)),
+    blockArray.map(async (height) =>
+      kyve ? kyve.getBlockByHeight(height) : getBlockByHeight(api, height),
+    ),
   );
 }
 
@@ -357,8 +361,9 @@ export function wrapEvent(
 export async function fetchBlocksBatches(
   api: CosmosClient,
   blockArray: number[],
+  kyveApi?: KyveApi,
 ): Promise<BlockContent[]> {
-  const blocks = await fetchCosmosBlocksArray(api, blockArray);
+  const blocks = await fetchCosmosBlocksArray(api, blockArray, kyveApi);
   return blocks.map(([blockInfo, blockResults]) => {
     try {
       assert(
@@ -366,7 +371,7 @@ export async function fetchBlocksBatches(
         `txInfos doesn't match up with block (${blockInfo.block.header.height}) transactions expected ${blockInfo.block.txs.length}, received: ${blockResults.results.length}`,
       );
 
-      return new LazyBlockContent(blockInfo, blockResults, api);
+      return new LazyBlockContent(blockInfo, blockResults, api, kyveApi);
     } catch (e) {
       logger.error(
         e,
@@ -390,7 +395,7 @@ export class LazyBlockContent implements BlockContent {
     private _blockInfo: BlockResponse,
     private _results: BlockResultsResponse,
     private _api: CosmosClient,
-    private _kyveBlock = false,
+    private _kyveBlock?: KyveApi,
   ) {}
 
   get block() {
@@ -417,6 +422,7 @@ export class LazyBlockContent implements BlockContent {
   }
 
   get events() {
+    console.log('using kyve', !!this._kyveBlock);
     if (!this._wrappedEvent) {
       this._wrappedEvent = this._kyveBlock
         ? kyveWrapEvent(
