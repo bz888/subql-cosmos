@@ -23,6 +23,7 @@ import {
   getLogger,
   ConnectionPoolService,
   ApiService as BaseApiService,
+  NodeConfig,
 } from '@subql/node-core';
 import { CosmWasmSafeClient } from '@subql/types-cosmos/interfaces';
 import {
@@ -33,10 +34,10 @@ import {
   MsgStoreCode,
   MsgUpdateAdmin,
 } from 'cosmjs-types/cosmwasm/wasm/v1/tx';
+import { CosmosNodeConfig } from '../configure/NodeConfig';
 import { SubqueryProject } from '../configure/SubqueryProject';
 import * as CosmosUtil from '../utils/cosmos';
-import { KyveApi } from '../utils/kyve';
-import { yargsOptions } from '../yargs';
+import { KyveApi } from '../utils/kyve/kyve';
 import { CosmosClientConnection } from './cosmosClient.connection';
 import { BlockContent } from './types';
 
@@ -48,15 +49,18 @@ export class ApiService
   implements OnApplicationShutdown
 {
   private fetchBlocksBatches = CosmosUtil.fetchBlocksBatches;
-  private kyveClient: KyveApi;
+  private kyve: KyveApi;
+  private nodeConfig: CosmosNodeConfig;
   registry: Registry;
 
   constructor(
     @Inject('ISubqueryProject') private project: SubqueryProject,
     connectionPoolService: ConnectionPoolService<CosmosClientConnection>,
     eventEmitter: EventEmitter2,
+    nodeConfig: NodeConfig,
   ) {
     super(connectionPoolService, eventEmitter);
+    this.nodeConfig = new CosmosNodeConfig(nodeConfig);
   }
 
   private async buildRegistry(): Promise<Registry> {
@@ -89,10 +93,11 @@ export class ApiService
 
     this.registry = await this.buildRegistry();
 
-    const { argv } = yargsOptions;
+    if (this.nodeConfig.kyve) {
+      this.kyve = new KyveApi(network.chainId, this.nodeConfig.kyve);
+      await this.kyve.init();
 
-    if (argv.kyve) {
-      this.kyveClient = new KyveApi(network.chainId);
+      this.fetchBlocksBatches = this.kyve.fetchBlocksBatches.bind(this.kyve);
     }
 
     await this.createConnections(
@@ -102,7 +107,6 @@ export class ApiService
           endpoint,
           this.fetchBlocksBatches,
           this.registry,
-          this.kyveApi,
         ),
       (connection: CosmosClientConnection) => {
         const api = connection.unsafeApi;
@@ -111,10 +115,6 @@ export class ApiService
     );
 
     return this;
-  }
-
-  get kyveApi(): KyveApi {
-    return this.kyveClient;
   }
 
   get api(): CosmosClient {
