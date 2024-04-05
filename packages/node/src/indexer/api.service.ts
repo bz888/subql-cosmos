@@ -23,10 +23,7 @@ import {
   ConnectionPoolService,
   ApiService as BaseApiService,
   NodeConfig,
-  IndexerEvent,
-  IApiConnectionSpecific,
 } from '@subql/node-core';
-import { CosmosNetworkConfig } from '@subql/types-cosmos';
 import { CosmWasmSafeClient } from '@subql/types-cosmos/interfaces';
 import {
   MsgClearAdmin,
@@ -89,48 +86,55 @@ export class ApiService
     await this.connectionPoolService.onApplicationShutdown();
   }
 
-  private async createKyveConnection(
-    network: CosmosNetworkConfig,
-    createConnection: (chainId: string) => Promise<IApiConnectionSpecific>,
-  ) {
-    const connection = await createConnection(network.chainId);
-
-    this.eventEmitter.emit(IndexerEvent.ApiConnected, {
-      value: 1,
-      apiIndex: 0,
-      endpoint: this.nodeConfig.kyveEndpoint,
-    });
-  }
-
   async init(): Promise<ApiService> {
     const { network } = this.project;
 
     this.registry = await this.buildRegistry();
 
-    if (this.nodeConfig.kyveChainId || this.nodeConfig.kyveEndpoint) {
-      await this.createKyveConnection(network, () =>
-        KyveConnection.create(network.chainId, this.registry, {
-          storageUrl: this.nodeConfig.storageUrl ?? 'https://arweave.net',
-          kyveChainId: this.nodeConfig.kyveChainId ?? 'kyve-1',
-          kyveEndpoint: this.nodeConfig.kyveEndpoint,
-        }),
+    if (this.nodeConfig.kyveEndpoint) {
+      if (this.nodeConfig.workers > 0 || this.nodeConfig.unfinalizedBlocks) {
+        throw new Error(
+          `Unfinalized blocks and workers are not supported by kyve indexing`,
+        );
+      }
+
+      // still need to use cosmosClient to proxy rpcCalls
+      const cosmosClient = await CosmosClientConnection.create(
+        (network.endpoint as string[])[0],
+        this.fetchBlocksBatches,
+        this.registry,
+      );
+
+      await this.createConnections(
+        network,
+        (endpoint) =>
+          KyveConnection.create(
+            this.nodeConfig.kyveEndpoint,
+            network.chainId,
+            this.registry,
+            this.nodeConfig.storageUrl,
+            this.nodeConfig.kyveChainId,
+            cosmosClient,
+          ),
+        (connection: KyveConnection) => Promise.resolve(network.chainId),
+      );
+    } else {
+      await this.createConnections(
+        network,
+        (endpoint) =>
+          CosmosClientConnection.create(
+            endpoint,
+            this.fetchBlocksBatches,
+            this.registry,
+          ),
+        (connection: CosmosClientConnection) => {
+          const api = connection.unsafeApi;
+          return api.getChainId();
+        },
       );
     }
 
-    await this.createConnections(
-      network,
-      (endpoint) =>
-        CosmosClientConnection.create(
-          endpoint,
-          this.fetchBlocksBatches,
-          this.registry,
-        ),
-      (connection: CosmosClientConnection) => {
-        const api = connection.unsafeApi;
-        return api.getChainId();
-      },
-    );
-
+    // }
     return this;
   }
 

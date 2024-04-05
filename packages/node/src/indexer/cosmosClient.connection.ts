@@ -29,7 +29,6 @@ const RETRY_DELAY = 2_500;
 const logger = getLogger('cosmos-client-connection');
 
 type FetchFunc = (
-  registry: Registry,
   batch: number[],
   api: CosmosClient,
   wrapEventsFunc: (
@@ -121,7 +120,6 @@ export class CosmosClientConnection
 
   async fetchBlocks(heights: number[]): Promise<BlockContent[]> {
     const blocks = await this.fetchBlocksBatches(
-      this.registry,
       heights,
       this.unsafeApi,
       wrapEvent,
