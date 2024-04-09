@@ -17,6 +17,7 @@ import {
 } from '@cosmjs/tendermint-rpc/build/tendermint37/responses';
 import { Inject, Injectable, OnApplicationShutdown } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { makeTempDir } from '@subql/common';
 import { CosmosProjectNetConfig } from '@subql/common-cosmos';
 import {
   getLogger,
@@ -116,6 +117,7 @@ export class ApiService
             this.nodeConfig.storageUrl,
             this.nodeConfig.kyveChainId,
             cosmosClient,
+            this.project.root,
           ),
         (connection: KyveConnection) => Promise.resolve(network.chainId),
       );

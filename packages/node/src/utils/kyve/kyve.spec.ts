@@ -1,7 +1,11 @@
 // Copyright 2020-2024 SubQuery Pte Ltd authors & contributors
 // SPDX-License-Identifier: GPL-3.0
 
+import fs from 'fs';
 import path from 'path';
+import { Readable } from 'stream';
+import { promisify } from 'util';
+import { gunzipSync, gzipSync } from 'zlib';
 import { GeneratedType, Registry } from '@cosmjs/proto-signing';
 import { defaultRegistryTypes } from '@cosmjs/stargate';
 import { Tendermint37Client } from '@cosmjs/tendermint-rpc';
@@ -9,6 +13,7 @@ import {
   BlockResponse,
   BlockResultsResponse,
 } from '@cosmjs/tendermint-rpc/build/tendermint37/responses';
+import { makeTempDir } from '@subql/common';
 import {
   MsgClearAdmin,
   MsgExecuteContract,
@@ -18,6 +23,7 @@ import {
   MsgUpdateAdmin,
 } from 'cosmjs-types/cosmwasm/wasm/v1/tx';
 import { isEqual } from 'lodash';
+import rimraf from 'rimraf';
 import { HttpClient } from '../../indexer/rpc-clients';
 import { LazyBlockContent } from '../cosmos';
 import { KyveApi } from './kyve';
@@ -33,9 +39,9 @@ const wasmTypes: ReadonlyArray<[string, GeneratedType]> = [
 
 const kyveBundlePath = path.join(
   __dirname,
-  '../../../test/kyve_block/bundle.json',
+  '../../../test/kyve_block/block_3856726.json',
 );
-const bundle_3856726 = require(kyveBundlePath);
+const block_3856726 = require(kyveBundlePath);
 
 jest.setTimeout(100000);
 describe('KyveApi', () => {
@@ -43,13 +49,27 @@ describe('KyveApi', () => {
   let tendermint: Tendermint37Client;
   let registry: Registry;
 
+  let tmpPath: string;
+  let retrieveBundleDataSpy: jest.SpyInstance;
+
+  const zipped = gzipSync(Buffer.from(JSON.stringify(block_3856726)));
+  const mockStream = new Readable({
+    read() {
+      this.push(zipped);
+      this.push(null);
+    },
+  });
+
   beforeAll(async () => {
+    tmpPath = await makeTempDir();
+
     registry = new Registry([...defaultRegistryTypes, ...wasmTypes]);
     kyveApi = await KyveApi.create(
       'archway-1',
       'https://rpc-eu-1.kyve.network',
       'https://arweave.net',
       'kyve-1',
+      tmpPath,
     );
     const client = new HttpClient('https://rpc.mainnet.archway.io:443');
     tendermint = await Tendermint37Client.create(client);
@@ -61,6 +81,11 @@ describe('KyveApi', () => {
     (kyveApi as any).cachedBundleDetails = undefined;
     (kyveApi as any).cachedBundle = undefined;
     (kyveApi as any).cachedBlocks = undefined;
+
+    retrieveBundleDataSpy.mockRestore();
+  });
+  afterAll(async () => {
+    await promisify(rimraf)(tmpPath);
   });
 
   it('ensure bundleDetails', async () => {
@@ -130,6 +155,76 @@ describe('KyveApi', () => {
     expect((kyveApi as any).poolId).toBe('2');
     expect((kyveApi as any).chainId).toBe('archway-1');
   });
+  it('able to update and clear file cache', async () => {
+    const checkFileExist = async (filePath: string) => {
+      try {
+        await fs.promises.access(filePath);
+        return true;
+      } catch (e) {
+        return false;
+      }
+    };
+
+    // create two mock bundles
+    await fs.promises.writeFile(path.join(tmpPath, 'bundle_130263'), 'mock'); // should be removed
+    await fs.promises.writeFile(path.join(tmpPath, 'bundle_130264'), 'mock');
+
+    retrieveBundleDataSpy = jest
+      .spyOn(kyveApi as any, 'retrieveBundleData')
+      .mockImplementation(() => {
+        return { data: mockStream };
+      });
+
+    const clearFileSpy = jest.spyOn(kyveApi as any, 'clearFileCache');
+
+    jest.spyOn(kyveApi as any, 'readFromFile').mockImplementation(() => {
+      return Promise.resolve(JSON.stringify(block_3856726));
+    });
+
+    await kyveApi.getBlockByHeight(3856726);
+    expect((kyveApi as any).cachedBundleDetails).not.toBe('0');
+
+    await expect(
+      checkFileExist(path.join(tmpPath, 'bundle_130263')),
+    ).resolves.toBe(false);
+    expect(clearFileSpy).toHaveBeenCalledTimes(1);
+  });
+  it('able to download and write to file', async () => {
+    (kyveApi as any).cachedBundleDetails = await (kyveApi as any).getBundleById(
+      1,
+    );
+
+    retrieveBundleDataSpy = jest
+      .spyOn(kyveApi as any, 'retrieveBundleData')
+      .mockImplementation(() => {
+        return { data: mockStream };
+      });
+
+    const pollSpy = jest.spyOn(kyveApi, 'pollUntilReadable');
+
+    await expect(
+      Promise.all([
+        kyveApi.getFileCacheData(),
+        kyveApi.getFileCacheData(),
+        kyveApi.getFileCacheData(),
+        kyveApi.getFileCacheData(),
+      ]),
+    ).resolves.not.toThrow();
+
+    expect(pollSpy).toHaveBeenCalled();
+
+    const MAX_COMPRESSION_BYTE_SIZE = 2 * 10 ** 9;
+
+    const r = await kyveApi.readFromFile(
+      path.join(tmpPath, `bundle_${(kyveApi as any).cachedBundleDetails.id}`),
+    );
+    const unzipped = gunzipSync(zipped, {
+      maxOutputLength: MAX_COMPRESSION_BYTE_SIZE,
+    });
+
+    // TODO for some reason it does not equal
+    expect(r).toEqual(JSON.stringify(block_3856726));
+  });
   describe('able to wrap kyveBlock', () => {
     let rpcLazyBlockContent: LazyBlockContent;
     let kyveLazyBlockContent: LazyBlockContent;
@@ -143,8 +238,8 @@ describe('KyveApi', () => {
         tendermint.blockResults(height),
       ]);
 
-      const blockInfo = bundle_3856726.value.block;
-      const blockResults = bundle_3856726.value.block_results;
+      const blockInfo = block_3856726[0].value.block;
+      const blockResults = block_3856726[0].value.block_results;
 
       const bi = (kyveApi as any).decodeBlock(blockInfo);
       const br = (kyveApi as any).decodeBlockResult(blockResults);
@@ -157,7 +252,7 @@ describe('KyveApi', () => {
       kyveLazyBlockContent = new LazyBlockContent(bi, br, registry);
     });
     it('compare kyve wrapped results with rpc results', () => {
-      const blockResults = bundle_3856726.value.block_results;
+      const blockResults = block_3856726[0].value.block_results;
 
       const br = (kyveApi as any).decodeBlockResult(blockResults);
 
