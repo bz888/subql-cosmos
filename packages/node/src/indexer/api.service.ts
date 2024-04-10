@@ -61,13 +61,6 @@ export class ApiService
     super(connectionPoolService, eventEmitter);
     this.nodeConfig = new CosmosNodeConfig(nodeConfig);
   }
-  // create a temp file
-  // download the block content
-
-  // the first worker that would load the bundle
-  // file lock to control permission on doing it
-
-  // clean up old bundles
 
   private async buildRegistry(): Promise<Registry> {
     const chaintypes = await this.getChainType(this.project.network);
@@ -99,45 +92,40 @@ export class ApiService
 
     this.registry = await this.buildRegistry();
 
+    await this.createConnections(
+      network,
+      (endpoint) =>
+        CosmosClientConnection.create(
+          endpoint,
+          this.fetchBlocksBatches,
+          this.registry,
+        ),
+      (connection: CosmosClientConnection) => {
+        const api = connection.unsafeApi;
+        return api.getChainId();
+      },
+    );
+
     if (this.nodeConfig.kyveEndpoint) {
-      // still need to use cosmosClient to proxy rpcCalls
-      const cosmosClient = await CosmosClientConnection.create(
-        (network.endpoint as string[])[0],
-        this.fetchBlocksBatches,
-        this.registry,
-      );
+      // this.connectionPoolService.updateConnection()
 
       await this.createConnections(
         network,
-        (endpoint) =>
-          KyveConnection.create(
+        (endpoint) => {
+          return KyveConnection.create(
             this.nodeConfig.kyveEndpoint,
             network.chainId,
             this.registry,
-            this.nodeConfig.storageUrl,
+            this.nodeConfig.kyveStorageUrl,
             this.nodeConfig.kyveChainId,
-            cosmosClient,
             this.project.root,
-          ),
+            this.unsafeApi,
+            this.safeApi.bind(this),
+          );
+        },
         (connection: KyveConnection) => Promise.resolve(network.chainId),
       );
-    } else {
-      await this.createConnections(
-        network,
-        (endpoint) =>
-          CosmosClientConnection.create(
-            endpoint,
-            this.fetchBlocksBatches,
-            this.registry,
-          ),
-        (connection: CosmosClientConnection) => {
-          const api = connection.unsafeApi;
-          return api.getChainId();
-        },
-      );
     }
-
-    // }
     return this;
   }
 
