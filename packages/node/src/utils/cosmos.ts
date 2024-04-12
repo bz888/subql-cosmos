@@ -1,4 +1,4 @@
-// Copyright 2020-2023 SubQuery Pte Ltd authors & contributors
+// Copyright 2020-2024 SubQuery Pte Ltd authors & contributors
 // SPDX-License-Identifier: GPL-3.0
 
 import assert from 'assert';
@@ -14,7 +14,7 @@ import {
   TxData,
   Event,
 } from '@cosmjs/tendermint-rpc/build/tendermint37';
-import { getLogger } from '@subql/node-core';
+import { IBlock, getLogger, Header } from '@subql/node-core';
 import {
   CosmosEventFilter,
   CosmosMessageFilter,
@@ -26,7 +26,6 @@ import {
   CosmosTxFilter,
 } from '@subql/types-cosmos';
 import { isObjectLike } from 'lodash';
-import { isLong } from 'long';
 import { CosmosClient } from '../indexer/api.service';
 import { BlockContent } from '../indexer/types';
 
@@ -94,17 +93,9 @@ export function filterMessageData(
   }
   if (filter.values) {
     for (const key in filter.values) {
-      let decodedMsgData = key
+      const decodedMsgData = key
         .split('.')
         .reduce((acc, curr) => acc[curr], data.msg.decodedMsg);
-
-      //stringify Long for equality check
-      if (isLong(decodedMsgData)) {
-        decodedMsgData =
-          typeof filter.values[key] === 'number'
-            ? decodedMsgData.toNumber()
-            : decodedMsgData.toString();
-      }
 
       if (filter.values[key] !== decodedMsgData) {
         return false;
@@ -344,10 +335,29 @@ export function wrapEvent(
   return events;
 }
 
+/*
+ * Cosmos has instant finalization, there is also no rpc method to get a block by hash
+ * To get around this we use blockHeights as hashes
+ */
+export function cosmosBlockToHeader(blockHeight: number): Header {
+  return {
+    blockHeight: blockHeight,
+    blockHash: blockHeight.toString(),
+    parentHash: (blockHeight - 1).toString(),
+  };
+}
+
+export function formatBlockUtil<B extends BlockContent>(block: B): IBlock<B> {
+  return {
+    block,
+    getHeader: () => cosmosBlockToHeader(block.block.header.height),
+  };
+}
+
 export async function fetchBlocksBatches(
-  blockArray: number[],
   api: CosmosClient,
-): Promise<BlockContent[]> {
+  blockArray: number[],
+): Promise<IBlock<BlockContent>[]> {
   const blocks = await fetchCosmosBlocksArray(
     (height: number) => getBlockByHeightByRpc(api, height),
     blockArray,
@@ -360,7 +370,9 @@ export async function fetchBlocksBatches(
         `txInfos doesn't match up with block (${blockInfo.block.header.height}) transactions expected ${blockInfo.block.txs.length}, received: ${blockResults.results.length}`,
       );
 
-      return new LazyBlockContent(blockInfo, blockResults, api.registry);
+      return formatBlockUtil(
+        new LazyBlockContent(blockInfo, blockResults, api.registry),
+      );
     } catch (e) {
       logger.error(
         e,

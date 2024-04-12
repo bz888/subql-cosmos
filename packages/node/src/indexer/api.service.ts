@@ -1,11 +1,11 @@
-// Copyright 2020-2023 SubQuery Pte Ltd authors & contributors
+// Copyright 2020-2024 SubQuery Pte Ltd authors & contributors
 // SPDX-License-Identifier: GPL-3.0
 
 import { CosmWasmClient, IndexedTx } from '@cosmjs/cosmwasm-stargate';
 import { toHex } from '@cosmjs/encoding';
 import { Uint53 } from '@cosmjs/math';
 import { GeneratedType, Registry } from '@cosmjs/proto-signing';
-import { Block, defaultRegistryTypes } from '@cosmjs/stargate';
+import { Block, defaultRegistryTypes, SearchTxQuery } from '@cosmjs/stargate';
 import {
   Tendermint37Client,
   toRfc3339WithNanoseconds,
@@ -22,6 +22,7 @@ import {
   getLogger,
   ConnectionPoolService,
   ApiService as BaseApiService,
+  IBlock,
   NodeConfig,
 } from '@subql/node-core';
 import { CosmWasmSafeClient } from '@subql/types-cosmos/interfaces';
@@ -46,7 +47,7 @@ const MAX_RECONNECT_ATTEMPTS = 5;
 
 @Injectable()
 export class ApiService
-  extends BaseApiService<CosmosClient, CosmosSafeClient, BlockContent[]>
+  extends BaseApiService<CosmosClient, CosmosSafeClient, IBlock<BlockContent>[]>
   implements OnApplicationShutdown
 {
   private fetchBlocksBatches = CosmosUtil.fetchBlocksBatches;
@@ -125,7 +126,7 @@ export class ApiService
   async fetchBlocks(
     heights: number[],
     numAttempts = MAX_RECONNECT_ATTEMPTS,
-  ): Promise<BlockContent[]> {
+  ): Promise<IBlock<BlockContent>[]> {
     try {
       if (this.kyveApi) {
         return this.kyveApi.fetchBlocksBatches(this.registry, heights);
@@ -205,7 +206,7 @@ export class CosmosClient extends CosmWasmClient {
 
   // eslint-disable-next-line @typescript-eslint/require-await
   async txInfoByHeight(height: number): Promise<readonly IndexedTx[]> {
-    return this.searchTx({ height: height });
+    return this.searchTx(`tx.height=${height}`);
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await
@@ -248,7 +249,7 @@ export class CosmosSafeClient
 
   // Deprecate
   async getBlock(): Promise<Block> {
-    const response = await this.forceGetTmClient().block(this.height);
+    const response = await this.forceGetCometClient().block(this.height);
     return {
       id: toHex(response.blockId.hash).toUpperCase(),
       header: {
@@ -266,21 +267,23 @@ export class CosmosSafeClient
 
   async validators(): Promise<readonly Validator[]> {
     return (
-      await this.forceGetTmClient().validators({
+      await this.forceGetCometClient().validators({
         height: this.height,
       })
     ).validators;
   }
 
-  async searchTx(): Promise<readonly IndexedTx[]> {
-    const txs: readonly IndexedTx[] = await this.safeTxsQuery(
+  async searchTx(query: SearchTxQuery): Promise<IndexedTx[]> {
+    const txs: IndexedTx[] = await this.safeTxsQuery(
       `tx.height=${this.height}`,
     );
     return txs;
   }
 
-  private async safeTxsQuery(query: string): Promise<readonly IndexedTx[]> {
-    const results = await this.forceGetTmClient().txSearchAll({ query: query });
+  private async safeTxsQuery(query: string): Promise<IndexedTx[]> {
+    const results = await this.forceGetCometClient().txSearchAll({
+      query: query,
+    });
     return results.txs.map((tx) => {
       return {
         txIndex: tx.index,
@@ -291,6 +294,7 @@ export class CosmosSafeClient
         tx: tx.tx,
         gasUsed: tx.result.gasUsed,
         gasWanted: tx.result.gasWanted,
+        msgResponses: [], // TODO can we get these?
         events: tx.result.events.map((evt) => ({
           ...evt,
           attributes: evt.attributes.map((attr) => ({
